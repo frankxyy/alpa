@@ -117,6 +117,8 @@ if __name__ == "__main__":
     import setuptools
     from setuptools.command.install import install
 
+    print("HAS_CUDA = {}".format(HAS_CUDA), flush=True)
+
     class BinaryDistribution(setuptools.Distribution):
 
         def has_ext_modules(self):

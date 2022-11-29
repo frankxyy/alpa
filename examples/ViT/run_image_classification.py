@@ -320,11 +320,13 @@ def main():
         ),
     )
 
+    num_labels = 10
+    model_args.model_name_or_path = 'google/vit-base-patch16-224'
     # Load pretrained model and tokenizer
     if model_args.config_name:
         config = AutoConfig.from_pretrained(
             model_args.config_name,
-            num_labels=len(train_dataset.classes),
+            num_labels=num_labels,
             image_size=data_args.image_size,
             cache_dir=model_args.cache_dir,
             use_auth_token=True if model_args.use_auth_token else None,
@@ -332,7 +334,7 @@ def main():
     elif model_args.model_name_or_path:
         config = AutoConfig.from_pretrained(
             model_args.model_name_or_path,
-            num_labels=len(train_dataset.classes),
+            num_labels=num_labels,
             image_size=data_args.image_size,
             cache_dir=model_args.cache_dir,
             use_auth_token=True if model_args.use_auth_token else None,
@@ -341,6 +343,8 @@ def main():
         config = CONFIG_MAPPING[model_args.model_type]()
         logger.warning("You are instantiating a new config instance from scratch.")
 
+    config.num_hidden_layers = 24
+    model_args.model_name_or_path = None
     if model_args.model_name_or_path:
         model = FlaxAutoModelForImageClassification.from_pretrained(
             model_args.model_name_or_path,
@@ -395,6 +399,7 @@ def main():
 
     # Enable tensorboard only on the master node
     has_tensorboard = is_tensorboard_available()
+    has_tensorboard = False
     if has_tensorboard and jax.process_index() == 0:
         try:
             from flax.metrics.tensorboard import SummaryWriter
@@ -474,7 +479,7 @@ def main():
                                     method=method,
                                     donate_argnums=(0,))
     p_eval_step = alpa.parallelize(eval_step)
-    dump_debug_info_train_step = dump_debug_info_eval_step = True
+    dump_debug_info_train_step = dump_debug_info_eval_step = False
 
     logger.info("***** Running training *****")
     logger.info(f"  Num examples = {len(train_dataset)}")
@@ -496,9 +501,10 @@ def main():
         train_metrics = []
 
         steps_per_epoch = len(train_dataset) // train_batch_size
-        train_step_progress_bar = tqdm(total=steps_per_epoch, desc="Training...", position=1, leave=False)
+        # train_step_progress_bar = tqdm(total=steps_per_epoch, desc="Training...", position=1, leave=False)
         # train
         for step, batch in enumerate(train_loader):
+            print("one iteration")
             state, train_metric = p_train_step(state, batch)
             train_metrics.append(train_metric)
 
@@ -512,61 +518,62 @@ def main():
                 epochs.write(f"Initial compilation completed. "
                              f"Time elapsed: {time.time() - train_start:.2f} s")
                              
-            train_step_progress_bar.update(1)
+            # train_step_progress_bar.update(1)
 
         latency = time.time() - last_time
         images_per_second = len(train_dataset) / latency
         train_time += time.time() - train_start
         last_time = time.time()
 
-        train_step_progress_bar.close()
+        # train_step_progress_bar.close()
         epochs.write(
             f"Epoch... ({epoch + 1}/{num_epochs} | Loss: {train_metric['loss']}, Learning Rate:"
             f" {train_metric['learning_rate']}), "
             f"Throughput: {images_per_second:.2f} images/s"
         )
 
+
         # ======================== Evaluating ==============================
-        eval_metrics = []
-        eval_steps = max(len(eval_dataset) // eval_batch_size, 1)
-        eval_step_progress_bar = tqdm(total=eval_steps, desc="Evaluating...", position=2, leave=False)
-        for batch in eval_loader:
-            # Model forward
-            metrics = p_eval_step(state.params, batch)
-            eval_metrics.append(metrics)
+        # eval_metrics = []
+        # eval_steps = max(len(eval_dataset) // eval_batch_size, 1)
+        # eval_step_progress_bar = tqdm(total=eval_steps, desc="Evaluating...", position=2, leave=False)
+        # for batch in eval_loader:
+        #     # Model forward
+        #     metrics = p_eval_step(state.params, batch)
+        #     eval_metrics.append(metrics)
 
-            if dump_debug_info_eval_step:
-                dump_debug_info_eval_step = False
-                executable = p_eval_step.get_last_executable()
-                executable.dump_debug_info("alpa_debug_info")
+        #     if dump_debug_info_eval_step:
+        #         dump_debug_info_eval_step = False
+        #         executable = p_eval_step.get_last_executable()
+        #         executable.dump_debug_info("alpa_debug_info")
 
-            eval_step_progress_bar.update(1)
+        #     eval_step_progress_bar.update(1)
 
-        # normalize eval metrics
-        eval_metrics = alpa.util.get_metrics(eval_metrics)
-        eval_metrics = jax.tree_map(jnp.mean, eval_metrics)
+        # # normalize eval metrics
+        # eval_metrics = alpa.util.get_metrics(eval_metrics)
+        # eval_metrics = jax.tree_map(jnp.mean, eval_metrics)
 
-        # Print metrics and update progress bar
-        eval_step_progress_bar.close()
-        desc = (
-            f"Epoch... ({epoch + 1}/{num_epochs} | Eval Loss: {round(eval_metrics['loss'].item(), 4)} | "
-            f"Eval Accuracy: {round(eval_metrics['accuracy'].item(), 4)})"
-        )
-        epochs.write(desc)
-        epochs.desc = desc
+        # # Print metrics and update progress bar
+        # eval_step_progress_bar.close()
+        # desc = (
+        #     f"Epoch... ({epoch + 1}/{num_epochs} | Eval Loss: {round(eval_metrics['loss'].item(), 4)} | "
+        #     f"Eval Accuracy: {round(eval_metrics['accuracy'].item(), 4)})"
+        # )
+        # epochs.write(desc)
+        # epochs.desc = desc
 
-        # Save metrics
-        if has_tensorboard and jax.process_index() == 0:
-            cur_step = epoch * (len(train_dataset) // train_batch_size)
-            write_metric(summary_writer, train_metrics, eval_metrics, train_time, cur_step)
+        # # Save metrics
+        # if has_tensorboard and jax.process_index() == 0:
+        #     cur_step = epoch * (len(train_dataset) // train_batch_size)
+        #     write_metric(summary_writer, train_metrics, eval_metrics, train_time, cur_step)
 
-        # save checkpoint after each epoch and push checkpoint to the hub
-        if jax.process_index() == 0:
-            alpa.prefetch(state.params)
-            params = alpa.util.map_to_nparray(state.params)
-            model.save_pretrained(training_args.output_dir, params=params)
-            if training_args.push_to_hub:
-                repo.push_to_hub(commit_message=f"Saving weights and logs of step {cur_step}", blocking=False)
+        # # save checkpoint after each epoch and push checkpoint to the hub
+        # if jax.process_index() == 0:
+        #     alpa.prefetch(state.params)
+        #     params = alpa.util.map_to_nparray(state.params)
+        #     model.save_pretrained(training_args.output_dir, params=params)
+        #     if training_args.push_to_hub:
+        #         repo.push_to_hub(commit_message=f"Saving weights and logs of step {cur_step}", blocking=False)
 
 
 if __name__ == "__main__":
